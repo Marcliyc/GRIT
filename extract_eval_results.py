@@ -171,9 +171,9 @@ def main():
     parser.add_argument("--gt-path", default="./mm-cot-data", help="Directory with *_val.jsonl ground truth files.")
     parser.add_argument("--out-dir", default="./eval_resuts", help="Where to write markdown/json outputs.")
     parser.add_argument("--dataset-order", nargs="*", default=[
-        "vsr", "tallyqa", "pope_coco", "gqa", "mathvista_mini",
+        "vsr", "tallyqa", "gqa", "mathvista_mini",
         "mme_count", "mme_position", "mme_existence", "mme_color",
-        "hallucination_VD", "ovd_position", "ovd_relationship", "ovd_negation",
+        "ovd_position"
     ], help="Preferred dataset ordering for the markdown tables.")
     args = parser.parse_args()
 
