@@ -166,7 +166,7 @@ def build_md(table: OrderedDict, title: str, dataset_order: List[str]) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Export ACC/IoU metrics from AWS outputs.")
+    parser = argparse.ArgumentParser(description="Export ACC/IoU metrics from outputs.")
     parser.add_argument("--base-output", default="./output", help="Root directory containing experiment subfolders.")
     parser.add_argument("--gt-path", default="./mm-cot-data", help="Directory with *_val.jsonl ground truth files.")
     parser.add_argument("--out-dir", default="./eval_resuts", help="Where to write markdown/json outputs.")
@@ -214,10 +214,10 @@ def main():
     md_iou = build_md(iou_table, "IoU Results", args.dataset_order)
 
     os.makedirs(args.out_dir, exist_ok=True)
-    acc_md_path = os.path.join(args.out_dir, "aws_metrics_acc.md")
-    iou_md_path = os.path.join(args.out_dir, "aws_metrics_iou.md")
-    acc_json_path = os.path.join(args.out_dir, "aws_metrics_acc.json")
-    iou_json_path = os.path.join(args.out_dir, "aws_metrics_iou.json")
+    acc_md_path = os.path.join(args.out_dir, "metrics_acc.md")
+    iou_md_path = os.path.join(args.out_dir, "metrics_giou.md")
+    acc_json_path = os.path.join(args.out_dir, "metrics_acc.json")
+    iou_json_path = os.path.join(args.out_dir, "metrics_giou.json")
 
     with open(acc_md_path, "w", encoding="utf-8") as f:
         f.write(md_acc + "\n")
