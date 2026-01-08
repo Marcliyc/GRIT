@@ -118,7 +118,13 @@ To evaluate models trained, apply the following to the training script to conver
 
     Replace `MODEL_NAME` with the path to your trained model checkpoint.
 
-
+ 3. to extract the evaluation result:
+    ```python extract_eval_results.py
+    --base-output ./outputs/
+    --gt-path ./GRIT_data
+    --out-dir .
+    ```
+    
 More evaluation scripts that are for zero-shot evaluation are available in `scripts/`, where they evaluate models with different prompts to fit zero-shot manner.
 
 
