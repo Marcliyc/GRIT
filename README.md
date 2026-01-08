@@ -119,7 +119,8 @@ To evaluate models trained, apply the following to the training script to conver
     Replace `MODEL_NAME` with the path to your trained model checkpoint.
 
  3. to extract the evaluation result:
-    ```python extract_eval_results.py
+    ```bash
+    python extract_eval_results.py
     --base-output ./outputs/
     --gt-path ./GRIT_data
     --out-dir .
