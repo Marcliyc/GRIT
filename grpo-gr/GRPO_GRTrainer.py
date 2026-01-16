@@ -41,7 +41,6 @@ from transformers import (
 )
 from vision_process import process_vision_info
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
-from transformers.utils import is_peft_available
 
 from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from trl.import_utils import is_vllm_available
@@ -51,9 +50,6 @@ from trl.trainer.grpo_config import GRPOConfig
 from trl.trainer.utils import generate_model_card, get_comet_experiment_url, pad, selective_log_softmax
 
 import types
-
-if is_peft_available():
-    from peft import PeftConfig, get_peft_model
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
@@ -161,8 +157,6 @@ class GRPOGRTrainer(Trainer):
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
-        peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
-            PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
     _tag_names = ["trl", "grpo"]
@@ -179,7 +173,6 @@ class GRPOGRTrainer(Trainer):
         reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
-        peft_config: Optional["PeftConfig"] = None,
         max_pixels: Optional[int] = 256*28*28, #12845056,
         min_pixels: Optional[int] = 3136,
         attn_implementation: str = "flash_attention_2", #"sdpa",
@@ -255,9 +248,6 @@ class GRPOGRTrainer(Trainer):
             model.config.force_image_size = args.force_image_size
             model.num_image_token = int((args.force_image_size // patch_size) ** 2 * (args.down_sample_ratio ** 2))
             
-        if peft_config is not None:
-            model = get_peft_model(model, peft_config)
-
         # Reference model
         if is_deepspeed_zero3_enabled():
             if "qwen" in model_id.lower():
@@ -275,13 +265,9 @@ class GRPOGRTrainer(Trainer):
                     self.ref_model.config.vision_config.image_size = args.force_image_size
                 self.ref_model.config.force_image_size = args.force_image_size
                 self.ref_model.num_image_token = int((args.force_image_size // patch_size) ** 2 * (args.down_sample_ratio ** 2))        
-        elif peft_config is None:
-            # If PEFT configuration is not provided, create a reference model based on the initial model.
-            self.ref_model = create_reference_model(model)
         else:
-            # If PEFT is used, the reference model is not needed since the adapter can be disabled
-            # to revert to the initial model.
-            self.ref_model = None
+            # Create a full reference model when PEFT is not used.
+            self.ref_model = create_reference_model(model)
 
         # Processing class
         if processing_class is None:
@@ -865,17 +851,23 @@ class GRPOGRTrainer(Trainer):
         
         if is_train:
             with torch.inference_mode():
-                if self.ref_model is not None:
-                    ref_per_token_logps = self._get_per_token_logps(
-                        self.ref_model, prompt_completion_ids, attention_mask, latest_pixel_values, latest_image_grid_thw, logits_to_keep
+                num_iterations = getattr(self.args, "num_iterations", 1)
+                steps_per_generation = getattr(self.args, "steps_per_generation", 1)
+                grad_accum_steps = getattr(self.args, "gradient_accumulation_steps", 1) # by default, GRPO is on policy, old_per_token_logps is not needed
+                # If we do multiple iterations or reuse generations across steps, compute old logps for PPO-style updates.
+                if num_iterations > 1 or steps_per_generation > grad_accum_steps:
+                    old_per_token_logps = self._get_per_token_logps(
+                        self.model,
+                        prompt_completion_ids,
+                        attention_mask,
+                        latest_pixel_values,
+                        latest_image_grid_thw,
+                        logits_to_keep,
                     )
                 else:
-                    with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        ref_per_token_logps = self._get_per_token_logps(
-                            self.model, prompt_completion_ids, attention_mask, latest_pixel_values, latest_image_grid_thw, logits_to_keep
-                        )
+                    old_per_token_logps = None
         else:
-            ref_per_token_logps = None
+            old_per_token_logps = None
                         
         time_taken = time.time() - start_time
         print(f"\n[Timer]: \nTime taken for tool call and logit probability computation: {time_taken:.2f} seconds.\n")
@@ -1009,7 +1001,7 @@ class GRPOGRTrainer(Trainer):
             'image_grid_thw': latest_image_grid_thw,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
-            "ref_per_token_logps": ref_per_token_logps,
+            "old_per_token_logps": old_per_token_logps,
             "advantages": advantages,
         }
     
@@ -1038,14 +1030,38 @@ class GRPOGRTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask_no_tool], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, pixel_values, image_grid_thw, logits_to_keep)
+        if self.beta != 0.0:
+            with torch.no_grad():
+                if self.ref_model is not None:
+                    ref_per_token_logps = self._get_per_token_logps(
+                        self.ref_model, input_ids, attention_mask, pixel_values, image_grid_thw, logits_to_keep
+                    )
+                else:
+                    with self.accelerator.unwrap_model(self.model).disable_adapter():
+                        ref_per_token_logps = self._get_per_token_logps(
+                            self.model, input_ids, attention_mask, pixel_values, image_grid_thw, logits_to_keep
+                        )
 
-        # Compute the KL divergence between the model and the reference model
-        ref_per_token_logps = inputs["ref_per_token_logps"]
-        per_token_kl = torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+        per_token_logps = self._get_per_token_logps(
+            model, input_ids, attention_mask, pixel_values, image_grid_thw, logits_to_keep
+        )
+        if self.beta != 0.0:
+            # Compute the KL divergence between the model and the reference model
+            per_token_kl = (
+                torch.exp(ref_per_token_logps - per_token_logps)
+                - (ref_per_token_logps - per_token_logps)
+                - 1
+            )
 
         advantages = inputs["advantages"]
-        per_token_loss = torch.exp(per_token_logps - per_token_logps.detach()) * advantages.unsqueeze(1)
+        old_per_token_logps = (
+            per_token_logps.detach() if inputs.get("old_per_token_logps") is None else inputs["old_per_token_logps"]
+        )
+        coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+        coef_2 = torch.clamp(coef_1, 1 - 0.28, 1 + 0.28)  # 0.28 value recommended by the DAPO paper
+        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
 
 
         def find_sublist_indices(full_list_of_list, sublist, get_end_id = False):
@@ -1063,15 +1079,17 @@ class GRPOGRTrainer(Trainer):
                     matched_indices.append(9999)
             return matched_indices
         
-        per_token_loss = -(per_token_loss - self.beta * per_token_kl)
+        if self.beta != 0.0:
+            per_token_loss = per_token_loss + self.beta * per_token_kl
         loss = ((per_token_loss * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
 
         # Log the metrics
         completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
         self._metrics["completion_length"].append(completion_length)
 
-        mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
-        self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+        if self.beta != 0.0:
+            mean_kl = ((per_token_kl * completion_mask).sum(dim=1) / completion_mask.sum(dim=1)).mean()
+            self._metrics["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
 
         time_taken = time.time() - start_time
         print(f"\n[Timer]: \nTime taken for loss computation: {time_taken:.2f} seconds.\n")
