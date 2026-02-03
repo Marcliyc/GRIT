@@ -54,7 +54,6 @@ from trl.trainer.grpo_config import GRPOConfig
 from trl.trainer.utils import generate_model_card, get_comet_experiment_url, pad, selective_log_softmax
 
 import types
-from copy import deepcopy
 
 import sys
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -238,25 +237,7 @@ class GRPOGRTrainer(Trainer):
         model_init_kwargs["use_cache"] = (
             False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
         )
-        print('Gradient Checkpointing:',args.gradient_checkpointing)
-
-        def _load_gemma_model(model_id_or_path, init_kwargs):
-            # Some Gemma variants don't accept all kwargs (e.g., attn_implementation/use_cache)
-            try:
-                if 'use_cache' in init_kwargs:
-                    del init_kwargs['use_cache']
-                return AutoModelForImageTextToText.from_pretrained(model_id_or_path, cache_dir='/cbica/projects/dba/GRIT/.cache/huggingface',local_files_only=True,**init_kwargs)
-            except TypeError as exc:
-                msg = str(exc)
-                print('Error when loading Gemma model:', msg)
-                fallback_kwargs = dict(init_kwargs)
-                if "attn_implementation" in msg:
-                    fallback_kwargs.pop("attn_implementation", None)
-                if "use_cache" in msg:
-                    fallback_kwargs.pop("use_cache", None)
-                if fallback_kwargs == init_kwargs:
-                    raise
-                return AutoModelForImageTextToText.from_pretrained(model_id_or_path,cache_dir='/cbica/projects/dba/GRIT/.cache/huggingface', **fallback_kwargs)
+        
 
         # if "qwen3" in model_id.lower():
         #     model = Qwen3_VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
@@ -285,9 +266,9 @@ class GRPOGRTrainer(Trainer):
             model.config.force_image_size = args.force_image_size
             model.num_image_token = int((args.force_image_size // patch_size) ** 2 * (args.down_sample_ratio ** 2))
         elif "gemma" in model_id.lower():
-            model = _load_gemma_model(model, model_init_kwargs)
-            if args.gradient_checkpointing:
-                model.config.use_cache = False
+            if model_init_kwargs is not None:
+                model_init_kwargs.pop("use_cache", None)
+            model = AutoModelForImageTextToText.from_pretrained(model, **model_init_kwargs)
             
         # Reference model
         if is_deepspeed_zero3_enabled():
@@ -309,9 +290,7 @@ class GRPOGRTrainer(Trainer):
                 self.ref_model.config.force_image_size = args.force_image_size
                 self.ref_model.num_image_token = int((args.force_image_size // patch_size) ** 2 * (args.down_sample_ratio ** 2))    
             elif "gemma" in model_id.lower():
-                self.ref_model = _load_gemma_model(model_id, model_init_kwargs)
-                if args.gradient_checkpointing:
-                    self.ref_model.config.use_cache = False
+                self.ref_model = AutoModelForImageTextToText.from_pretrained(model_id, **model_init_kwargs)    
         else:
             # Create a full reference model when PEFT is not used.
             self.ref_model = create_reference_model(model)
@@ -368,9 +347,6 @@ class GRPOGRTrainer(Trainer):
                 self.ref_model.vision_model.encoder.gradient_checkpointing = True
             elif "gemma" in model_id.lower():
                 processing_class = AutoProcessor.from_pretrained(model_id)
-                if processing_class.tokenizer.pad_token_id is None:
-                    processing_class.tokenizer.pad_token = processing_class.tokenizer.eos_token
-                processing_class.tokenizer.padding_side = "left"
                 processing_class.pad_token_id = processing_class.tokenizer.pad_token_id
                 processing_class.eos_token_id = processing_class.tokenizer.eos_token_id
                 processing_class.image_processor.max_pixels = max_pixels
@@ -462,14 +438,14 @@ class GRPOGRTrainer(Trainer):
                 )
 
         assert self.use_vllm == False
-
+        
         self.generation_config = GenerationConfig(
             max_new_tokens=self.max_completion_length,
             do_sample=True,
             temperature=args.temperature,
             pad_token_id=processing_class.pad_token_id,
-            top_p = self.args.top_p, #added
-            top_k = self.args.top_k,
+            top_p = 0.9, #added
+            top_k = 20
         )
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -519,23 +495,6 @@ class GRPOGRTrainer(Trainer):
 
         self.is_train = True
 
-    def _inject_images_for_gemma(self, messages, images):
-        if not images:
-            return messages
-        new_messages = deepcopy(messages)
-        img_idx = 0
-        for msg in new_messages:
-            if isinstance(msg.get("content"), list):
-                for part in msg["content"]:
-                    if part.get("type") in ("image", "image_url") or "image" in part or "image_url" in part:
-                        if img_idx >= len(images):
-                            break
-                        part["type"] = "image"
-                        part["image"] = images[img_idx]
-                        part.pop("image_url", None)
-                        img_idx += 1
-        return new_messages
-
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
@@ -556,14 +515,14 @@ class GRPOGRTrainer(Trainer):
         return RepeatRandomSampler(eval_dataset, self.num_generations) # set minimum num_generation for eval, making the eval faster #self.num_generations)
 
     # Get the per-token log probabilities for the completions for the model and the reference model
-    def _get_per_token_logps(self, model, input_ids, attention_mask, pixel_values, image_grid_thw, logits_to_keep, token_type_ids=None):
+    def _get_per_token_logps(self, model, input_ids, attention_mask, pixel_values, image_grid_thw, logits_to_keep):
         # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
         if "qwen" in self.model_id.lower():
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, pixel_values=pixel_values, image_grid_thw=image_grid_thw)
         elif "internvl" in self.model_id.lower():
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, pixel_values=pixel_values, image_flags=image_grid_thw)
         elif "gemma" in self.model_id.lower():
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, pixel_values=pixel_values, token_type_ids=token_type_ids)
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask, pixel_values=pixel_values)
 
         logits = outputs.logits
         logits = logits[:, -logits_to_keep-1:-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
@@ -744,42 +703,34 @@ class GRPOGRTrainer(Trainer):
             elif "internvl" in self.model_id.lower():
                 prompt_inputs, image_inputs = self.multi_modal_get_item(inputs_tobe_updated_each_turn)
             elif "gemma" in self.model_id.lower():
-                # Use image objects in the chat template when supported (matches MedGemma usage)
+                # 1. Use YOUR existing helper to get images (Same as Qwen)
                 image_inputs = []
-                messages_with_images = []
+                # Gemma generally doesn't support video, so we ignore video_inputs
                 for inp in inputs_tobe_updated_each_turn:
                     imgs, _ = process_vision_info(inp['message'])
-                    image_inputs.append(imgs or [])
-                    messages_with_images.append(self._inject_images_for_gemma(inp['message'], imgs))
+                    if imgs:
+                        image_inputs.append(imgs)
+                
+                # Flatten list (Same as Qwen)
+                image_list = [img for sublist in image_inputs for img in sublist]
+                if len(image_list) == 0:
+                    image_list = None
 
-                try:
-                    prompt_inputs = self.processing_class.apply_chat_template(
-                        messages_with_images,
-                        add_generation_prompt=True,
-                        tokenize=True,
-                        return_dict=True,
-                        return_tensors="pt",
-                        padding=True,
-                    )
-                    #('Prompt_inputs:',prompt_inputs)
-                except TypeError:
-                    # Fallback to text+images path if processor doesn't support tokenized chat templates
-                    print("Warning: MedGemma processor does not support tokenized chat templates, falling back to text+images path.")
-                    text = [self.processing_class.apply_chat_template(
-                        inp['message'],
-                        tokenize=False,
-                        add_generation_prompt=True
-                    ) for inp in inputs_tobe_updated_each_turn]
-                    image_list = [img for sublist in image_inputs for img in sublist]
-                    if len(image_list) == 0:
-                        image_list = None
-                    prompt_inputs = self.processing_class(
-                        text=text,
-                        images=image_list,
-                        padding=True,
-                        padding_side='left',
-                        return_tensors="pt"
-                    )
+                # 2. Apply Chat Template (Standard)
+                text = [self.processing_class.apply_chat_template(
+                    inp['message'], 
+                    tokenize=False, 
+                    add_generation_prompt=True
+                ) for inp in inputs_tobe_updated_each_turn]
+                
+                # 3. Processor Call (DIFFERENT: No 'videos', no 'image_grid_thw')
+                prompt_inputs = self.processing_class(
+                    text=text,
+                    images=image_list,
+                    padding=True,
+                    padding_side='left',
+                    return_tensors="pt"
+                )
 
             prompt_inputs = super()._prepare_inputs(prompt_inputs)
             latest_prompt_ids, latest_prompt_mask, latest_pixel_values = \
@@ -793,9 +744,7 @@ class GRPOGRTrainer(Trainer):
                     latest_pixel_values = prompt_inputs["pixel_values"]
 
             latest_image_grid_thw = prompt_inputs.get("image_grid_thw")
-            token_type_ids = prompt_inputs.get('token_type_ids', None)
-            if token_type_ids is not None:
-                token_type_ids = token_type_ids.to(device)
+            
             
             if self.max_turns == j:
                 break
@@ -875,13 +824,10 @@ class GRPOGRTrainer(Trainer):
                 with torch.no_grad():
                     if self.is_train:
                         # Training: Use standard sampling config
-                        self.model.eval()
                         prompt_completion_ids = self.model.generate(
                             **prompt_inputs, 
-                            generation_config=self.generation_config,
-                            tokenizer=self.processing_class.tokenizer  # <--- ADD THIS
+                            generation_config=self.generation_config
                         )
-                        self.model.train()
                     else:
                         # Evaluation: Create a deterministic/greedy config
                         # This matches the logic used for Qwen/InternVL above
@@ -893,8 +839,7 @@ class GRPOGRTrainer(Trainer):
                         
                         prompt_completion_ids = self.model.generate(
                             **prompt_inputs, 
-                            generation_config=eval_generation_config,
-                            tokenizer=self.processing_class.tokenizer  # <--- ADD THIS
+                            generation_config=eval_generation_config
                         )
                     
                     # Post-generation: Slice off the prompt to keep only the new tokens
@@ -1007,12 +952,6 @@ class GRPOGRTrainer(Trainer):
         attention_mask = torch.cat([original_prompt_mask, completion_mask_no_tool], dim=1)  # (B*G, P+C)
         prompt_completion_ids = torch.cat([original_prompt_ids, completion_ids], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens, this is initially the max completion length but will extend as using tools
-
-        full_token_type_ids = None
-        if token_type_ids is not None:
-            #current_prompt_token_type_ids = token_type_ids.repeat_interleave(self.num_generations, dim=0)
-            completion_token_type_ids = torch.zeros_like(completion_ids)
-            full_token_type_ids = torch.cat([token_type_ids, completion_token_type_ids], dim=1)
         
         if is_train:
             with torch.inference_mode():
@@ -1028,7 +967,6 @@ class GRPOGRTrainer(Trainer):
                         latest_pixel_values,
                         latest_image_grid_thw,
                         logits_to_keep,
-                        token_type_ids=full_token_type_ids
                     )
                 else:
                     old_per_token_logps = None
@@ -1212,7 +1150,6 @@ class GRPOGRTrainer(Trainer):
             "completion_mask": completion_mask,
             "old_per_token_logps": old_per_token_logps,
             "advantages": advantages,
-            'token_type_ids': full_token_type_ids,
         }
     
         return return_content
@@ -1228,23 +1165,7 @@ class GRPOGRTrainer(Trainer):
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         pixel_values, image_grid_thw = inputs['pixel_values'], inputs['image_grid_thw']
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
-        prompt_token_type_ids = inputs.get('token_type_ids',None)
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-
-        token_type_ids = None
-        if prompt_token_type_ids is not None:
-             # prompt_token_type_ids in inputs is likely the original (B, L)
-             # But prompt_ids here is (B*G, L). We need to ensure alignment.
-             # In _prepare_inputs return_content, 'prompt_ids' is 'original_prompt_ids' 
-             # which is usually repeated or aligned.
-             # Check how 'prompt_ids' are stored. If they are repeated, prompt_token_type_ids should be too.
-             
-             # If stored as original (batch size), repeat them:
-             if prompt_token_type_ids.shape[0] != prompt_ids.shape[0]:
-                 prompt_token_type_ids = prompt_token_type_ids.repeat_interleave(self.num_generations, dim=0)
-            
-             completion_token_type_ids = torch.zeros_like(completion_ids)
-             token_type_ids = torch.cat([prompt_token_type_ids, completion_token_type_ids], dim=1)
         
         is_eos = completion_ids == self.processing_class.eos_token_id
         is_pad = completion_ids == self.processing_class.pad_token_id
@@ -1260,16 +1181,16 @@ class GRPOGRTrainer(Trainer):
             with torch.no_grad():
                 if self.ref_model is not None:
                     ref_per_token_logps = self._get_per_token_logps(
-                        self.ref_model, input_ids, attention_mask, pixel_values, image_grid_thw, logits_to_keep, token_type_ids=token_type_ids
+                        self.ref_model, input_ids, attention_mask, pixel_values, image_grid_thw, logits_to_keep
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
                         ref_per_token_logps = self._get_per_token_logps(
-                            self.model, input_ids, attention_mask, pixel_values, image_grid_thw, logits_to_keep, token_type_ids=token_type_ids
+                            self.model, input_ids, attention_mask, pixel_values, image_grid_thw, logits_to_keep
                         )
 
         per_token_logps = self._get_per_token_logps(
-            model, input_ids, attention_mask, pixel_values, image_grid_thw, logits_to_keep, token_type_ids=token_type_ids
+            model, input_ids, attention_mask, pixel_values, image_grid_thw, logits_to_keep
         )
         if self.beta != 0.0:
             # Compute the KL divergence between the model and the reference model
@@ -1284,8 +1205,7 @@ class GRPOGRTrainer(Trainer):
             per_token_logps.detach() if inputs.get("old_per_token_logps") is None else inputs["old_per_token_logps"]
         )
         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
-        epsilon = self.args.epsilon_clip
-        coef_2 = torch.clamp(coef_1, 1 - epsilon, 1 + epsilon)  # 0.28 value recommended by the DAPO paper
+        coef_2 = torch.clamp(coef_1, 1 - 0.28, 1 + 0.28)  # 0.28 value recommended by the DAPO paper
         per_token_loss1 = coef_1 * advantages.unsqueeze(1)
         per_token_loss2 = coef_2 * advantages.unsqueeze(1)
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)

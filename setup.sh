@@ -1,9 +1,25 @@
 #!/bin/bash
 
 
-sudo apt-get update
-sudo apt-get install -y python3-dev build-essential ninja-build
-sudo apt-get install ffmpeg libsm6 libxext6  -y
+# sudo apt-get update
+# sudo apt-get install -y python3-dev build-essential ninja-build
+# sudo apt-get install ffmpeg libsm6 libxext6  -y
+
+# #1. Install compilers and build tools (replaces build-essential, python3-dev, ninja-build)
+# conda install -n grit -y -c conda-forge gcc_linux-64 gxx_linux-64 make ninja
+
+# # 2. Install FFmpeg and X11 libraries (replaces ffmpeg, libsm6, libxext6)
+# conda install -n grit -y -c conda-forge ffmpeg xorg-libxext xorg-libsm
+
+# conda activate grit
+
+#1. Install compilers and build tools (replaces build-essential, python3-dev, ninja-build)
+conda install -y -c conda-forge gcc_linux-64 gxx_linux-64 make ninja
+
+# 2. Install FFmpeg and X11 libraries (replaces ffmpeg, libsm6, libxext6)
+conda install -y -c conda-forge ffmpeg xorg-libxext xorg-libsm
+
+#conda activate grit
 
 cd trl
 pip install -e .
@@ -42,7 +58,7 @@ pip install math_verify
 pip install jsonlines
 
 pip install Pillow
-pip install numpy
+pip install "numpy<2.0.0"
 
 pip install regex
 pip install deepspeed

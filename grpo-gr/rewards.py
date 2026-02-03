@@ -11,8 +11,10 @@ from collections import defaultdict
 import nltk
 from nltk.translate.bleu_score import sentence_bleu
 
-from callGPT import call_gpt
+#from callGPT import call_gpt
 
+def call_gpt(prompt):
+    raise NotImplementedError
 
 def gpt_score_reward(prompts, completions, gt_answer, **kwargs):
     """Reward based on gpt-4o evaluation between generated response and correct answer."""
@@ -116,6 +118,149 @@ def bleu_score_reward(prompts, completions, gt_answer, **kwargs):
         rewards.append(reward * max_reward)
     return rewards
 
+def create_number_mapping():
+    """
+    Generates a dictionary mapping English number phrases to string digits.
+    Covers:
+    - 0-19 ("zero"..."nineteen")
+    - 20-99 ("twenty"..."ninety nine")
+    - Special multipliers ("single", "pair", "dozen")
+    """
+    mapping = {}
+    
+    # 1. Basic Units and Teens
+    units = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+        "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", 
+        "seventeen", "eighteen", "nineteen"
+    ]
+    
+    for digit, word in enumerate(units):
+        mapping[word] = str(digit)
+        
+    # 2. Tens (20, 30... 90)
+    tens = {
+        20: "twenty", 30: "thirty", 40: "forty", 50: "fifty", 
+        60: "sixty", 70: "seventy", 80: "eighty", 90: "ninety"
+    }
+    
+    # Add exact tens ("twenty" -> "20")
+    for val, word in tens.items():
+        mapping[word] = str(val)
+        
+        # Add compounds ("twenty one" -> "21", "twenty-one" -> "21")
+        for digit in range(1, 10):
+            unit_word = units[digit]
+            full_val = str(val + digit)
+            
+            # "twenty one"
+            mapping[f"{word} {unit_word}"] = full_val
+            # "twenty-one"
+            mapping[f"{word}-{unit_word}"] = full_val
+
+    # 3. Special Quantifiers (Synonyms)
+    special_cases = {
+        'no': '0', 'none': '0',
+        'single': '1', 'a': '1', 'an': '1',
+        'couple': '2', 'pair': '2', 'double': '2',
+        'triple': '3',
+        'dozen': '12'
+    }
+    mapping.update(special_cases)
+    
+    return mapping
+
+# Create mapping once globally to save time
+NUMBER_MAPPING = create_number_mapping()
+
+def normalize_numbers_in_text(text):
+    """
+    Replaces English number words in text with digits.
+    Example: "There are twenty one cells" -> "There are 21 cells"
+    """
+    text = text.lower()
+    
+    # Sort keys by length (descending) so we replace "twenty one" before "one"
+    # This prevents "twenty one" becoming "twenty 1"
+    sorted_patterns = sorted(NUMBER_MAPPING.keys(), key=len, reverse=True)
+    
+    # Create a massive regex pattern for all number phrases
+    # \b ensures we match "one" but not "bone"
+    pattern = r'\b(' + '|'.join(map(re.escape, sorted_patterns)) + r')\b'
+    
+    def replace_match(match):
+        return NUMBER_MAPPING[match.group(0)]
+        
+    # Execute replacement
+    return re.sub(pattern, replace_match, text)
+
+def answer_correctness_reward(prompts, completions, gt_answer, **kwargs):
+    rewards = []
+    
+    for response, answer in zip(completions, gt_answer):
+        # 1. Extract content
+        if '<answer>' not in response:
+            rewards.append(0.0)
+            continue
+            
+        predicted_content = response.split('<answer>', 1)[-1]
+        if '</answer>' in predicted_content:
+            predicted_content = predicted_content.split('</answer>')[0]
+            
+        # 2. Normalize (convert "twenty-one" -> "21")
+        # Ensure you include the normalize_numbers_in_text function from the previous step
+        pred_normalized = normalize_numbers_in_text(predicted_content)
+        
+        # Clean punctuation
+        pred_clean = re.sub(r'[^\w\s]', ' ', pred_normalized).strip()
+        gt_clean = str(answer).lower().strip()
+        
+        reward = 0.0
+
+        if gt_clean.isdigit():
+            # --- NEW: Anti-Gaming Filter ---
+            # Find all integers in the normalized answer
+            # "There are 0 to 1 to 2..." -> ['0', '1', '2'...]
+            all_numbers = re.findall(r'\d+', pred_clean)
+            unique_numbers = set(all_numbers)
+            
+            # If the model sprays more than 2 distinct numbers, automatic fail.
+            # We allow 2 to handle cases like "It is 4 or 5" (which usually fails the GT check anyway, but isn't spam)
+            if len(unique_numbers) > 2:
+                reward = 0.0
+            elif len(unique_numbers) == 0:
+                reward = 0.0
+            else:
+                # Standard check: Does the exact number exist as a distinct word?
+                # if re.search(r'\b' + re.escape(gt_clean) + r'\b', pred_clean):
+                #     reward = 1.0
+                min_diff = min(abs(int(gt_clean) - int(pred_val)) for pred_val in unique_numbers)
+                
+                # 4. Apply Inverse Distance Scaling
+                # Diff 0 -> 1.0
+                # Diff 1 -> 0.5
+                # Diff 2 -> 0.33
+                reward = 1.0 / (1.0 + min_diff)
+                if len(unique_numbers)==2:
+                    reward *= 0.5
+
+        elif gt_clean in ['yes', 'no']:
+            # (Same existence logic as before)
+            has_yes = bool(re.search(r'\byes\b', pred_clean))
+            has_no = bool(re.search(r'\bno\b', pred_clean))
+            
+            if gt_clean == 'yes' and has_yes and not has_no:
+                reward = 1.0
+            elif gt_clean == 'no' and has_no and not has_yes:
+                reward = 1.0
+        else:
+            if gt_clean in pred_clean:
+                reward = 1.0
+                
+        rewards.append(reward)
+
+    return rewards
+
 def answer_format_reward(prompts, completions, gt_answer, **kwargs):
     """Reward if generated response contains correct answer."""
     rewards = []
@@ -166,7 +311,9 @@ def think_and_rethink_format_reward(prompts, completions, gt_answer, **kwargs):
 
 def grounded_region_specific_thinking_format_reward_think_rethink(prompts, completions, gt_answer, **kwargs):
     rewards = []
+    ind = -1
     for response, answer in zip(completions, gt_answer):
+        ind += 1
         if not '<rethink>' in response:
             reward = 0.0
             rewards.append(reward)
@@ -177,10 +324,29 @@ def grounded_region_specific_thinking_format_reward_think_rethink(prompts, compl
         pattern = r'\b\d+,\s*\d+,\s*\d+,\s*\d+\b'
         matches = re.findall(pattern, response)
                 
-        if len(matches) > 0:
-            reward += 0.5
-        if kwargs['dataset'][0] == 'tallyqa' and len(matches) == int(answer):
-            reward += 1
+        # if len(matches) > 0 and not (answer.lower() == 'no' or int(answer) == 0):
+        #     reward += 0.5
+        #     if answer.lower() == 'yes':
+        #         reward += 0.5
+        # elif len(matches) == 0 and answer.lower() == 'no':
+        #     reward += 1
+
+        if (kwargs['dataset'][0] == 'tallyqa' or 'txl_count' in kwargs['dataset'][ind]):
+            try:
+                # if len(matches) == int(answer):
+                #     reward += 1
+                n_bbox = len(matches)
+                target = int(answer)
+                reward += 1.5/(1+abs(target-n_bbox))
+            except ValueError:
+                pass
+        else:
+            if len(matches) > 0 and answer.lower() != 'no':
+                reward += 0.5
+                if answer.lower() == 'yes':
+                    reward += 0.5
+            elif len(matches) == 0 and answer.lower() == 'no':
+                reward += 1
 
                 
         rewards.append(reward) 

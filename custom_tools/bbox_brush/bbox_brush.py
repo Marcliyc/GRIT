@@ -1,4 +1,5 @@
-from transformers import Tool
+# from transformers import Tool
+from smolagents import Tool
 import base64
 from PIL import Image, ImageDraw
 import io
@@ -46,22 +47,54 @@ def bbox_brush(image_base64, target_str, normalized_bboxs):
 # result = bbox_brush(expression)
 # print(result)
 print("bbox_brush function is ready to be used.")
+# class BoundingboxBrush(Tool):
+#     name = "bbox_brush"
+#     description = (
+#         "This is a tool that returns the a image that with bounding box drawn."
+#     )
+
+#     inputs = {"image_base64":{'type':'string', 
+#                           'description':'The base64 image codings.',
+#                           'content':'text'},
+#               "bbox":{'type':'string',
+#                       'description':'The bounding box coordinates in the format of x1,y1,x2,y2.',
+#                       'content':'text'}
+#               }
+#     outputs = 'text'
+#     output_type = "text"
+
+#     def __call__(self, img_str: str, tool_call_query: str, normalized_bboxs: bool = False):
+#         return bbox_brush(img_str, tool_call_query, normalized_bboxs)
+
 class BoundingboxBrush(Tool):
     name = "bbox_brush"
     description = (
-        "This is a tool that returns the a image that with bounding box drawn."
+        "This is a tool that returns an image with a bounding box drawn on it."
     )
 
-    inputs = {"image_base64":{'type':'string', 
-                          'description':'The base64 image codings.',
-                          'content':'text'},
-              "bbox":{'type':'string',
-                      'description':'The bounding box coordinates in the format of x1,y1,x2,y2.',
-                      'content':'text'}
-              }
-    outputs = 'text'
-    output_type = "text"
+    # These keys (image_base64, bbox) MUST match the arguments in forward()
+    inputs = {
+        "image_base64": {
+            'type': 'string', 
+            'description': 'The base64 image coding.',
+        },
+        "bbox": {
+            'type': 'string',
+            'description': 'The bounding box coordinates in the format of x1,y1,x2,y2.',
+        },
+        'normalized_bboxs':{
+            'type':'boolean',
+            'description': 'Set to True if coordinates are 0-1000 relative, False if absolute pixels. Defaults to False.',
+            'nullable': True
+        }
+    }
+    
+    # FIX 1: Change "text" to "string"
+    output_type = "string"
 
-    def __call__(self, img_str: str, tool_call_query: str, normalized_bboxs: bool = False):
-        return bbox_brush(img_str, tool_call_query, normalized_bboxs)
+
+    # FIX 2: Change __call__ to forward
+    # FIX 3: Arguments match 'inputs' keys above
+    def forward(self, image_base64: str, bbox: str, normalized_bboxs: bool = False):
+        return bbox_brush(image_base64, bbox, normalized_bboxs)
 
