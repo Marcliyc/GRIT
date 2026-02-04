@@ -424,3 +424,166 @@ def repetitive_reward(prompts, completions, completion_ids, gt_answer, **kwargs)
         # scale into [0, max_reward]
         rewards.append((score - (1-reward)) * max_reward)
     return rewards
+
+
+def _extract_bboxes_from_text(text):
+    segments = []
+    if "<box>" in text and "</box>" in text:
+        segments.append(text.split("<box>", 1)[1].split("</box>", 1)[0])
+    if "bbox_2d" in text:
+        segments.append(text)
+    if not segments:
+        segments = [text]
+
+    pattern = re.compile(r"\b\d+,\s*\d+,\s*\d+,\s*\d+\b")
+    bboxes = []
+    for segment in segments:
+        for match in pattern.findall(segment):
+            bbox = [float(value.strip()) for value in match.split(",")]
+            if len(bbox) == 4:
+                bboxes.append(bbox)
+    return bboxes
+
+
+def _sanitize_bbox(bbox):
+    x1, y1, x2, y2 = bbox
+    x_min, x_max = sorted([x1, x2])
+    y_min, y_max = sorted([y1, y2])
+    if x_max <= x_min or y_max <= y_min:
+        return None
+    return (x_min, y_min, x_max, y_max)
+
+
+def _union_area(rects):
+    if not rects:
+        return 0.0
+    xs = sorted({rect[0] for rect in rects}.union({rect[2] for rect in rects}))
+    area = 0.0
+    for i in range(len(xs) - 1):
+        x_left = xs[i]
+        x_right = xs[i + 1]
+        if x_right <= x_left:
+            continue
+        intervals = []
+        for x1, y1, x2, y2 in rects:
+            if x1 < x_right and x2 > x_left:
+                intervals.append((y1, y2))
+        if not intervals:
+            continue
+        intervals.sort()
+        merged = []
+        cur_start, cur_end = intervals[0]
+        for start, end in intervals[1:]:
+            if start <= cur_end:
+                cur_end = max(cur_end, end)
+            else:
+                merged.append((cur_start, cur_end))
+                cur_start, cur_end = start, end
+        merged.append((cur_start, cur_end))
+        y_total = sum(end - start for start, end in merged)
+        area += (x_right - x_left) * y_total
+    return area
+
+
+def _intersection_union_areas(pred_rects, gt_rects):
+    pred_area = _union_area(pred_rects)
+    gt_area = _union_area(gt_rects)
+    intersections = []
+    for px1, py1, px2, py2 in pred_rects:
+        for gx1, gy1, gx2, gy2 in gt_rects:
+            ix1 = max(px1, gx1)
+            iy1 = max(py1, gy1)
+            ix2 = min(px2, gx2)
+            iy2 = min(py2, gy2)
+            if ix2 > ix1 and iy2 > iy1:
+                intersections.append((ix1, iy1, ix2, iy2))
+    intersection_area = _union_area(intersections)
+    union_area = pred_area + gt_area - intersection_area
+    return intersection_area, union_area
+
+
+def grounded_region_bbox_giou_reward(prompts, completions, bboxs, width=None, height=None, normalized_bboxs=False, **kwargs):
+    """Reward based on generalized IoU (GIoU) between predicted and ground-truth bbox unions."""
+    rewards = []
+    width_list = width or [None] * len(completions)
+    height_list = height or [None] * len(completions)
+    for response, gt_boxes, img_w, img_h in zip(completions, bboxs, width_list, height_list):
+        if not gt_boxes:
+            rewards.append(0.0)
+            continue
+
+        pred_boxes = _extract_bboxes_from_text(response)
+        if normalized_bboxs and img_w and img_h:
+            pred_boxes = [
+                [box[0] * img_w, box[1] * img_h, box[2] * img_w, box[3] * img_h]
+                for box in pred_boxes
+            ]
+
+        pred_rects = []
+        for box in pred_boxes:
+            rect = _sanitize_bbox(box)
+            if rect:
+                pred_rects.append(rect)
+
+        gt_rects = []
+        for box in gt_boxes:
+            rect = _sanitize_bbox(box)
+            if rect:
+                gt_rects.append(rect)
+
+        if not pred_rects or not gt_rects:
+            rewards.append(0.0)
+            continue
+
+        intersection_area, union_area = _intersection_union_areas(pred_rects, gt_rects)
+        if union_area <= 0:
+            rewards.append(0.0)
+            continue
+
+        iou = intersection_area / union_area
+        all_rects = pred_rects + gt_rects
+        x_min = min(rect[0] for rect in all_rects)
+        y_min = min(rect[1] for rect in all_rects)
+        x_max = max(rect[2] for rect in all_rects)
+        y_max = max(rect[3] for rect in all_rects)
+        c_area = max(0.0, (x_max - x_min) * (y_max - y_min))
+        if c_area <= 0:
+            rewards.append(0.0)
+            continue
+
+        giou = iou - (c_area - union_area) / c_area
+        rewards.append(giou)
+
+    return rewards
+
+
+def grounded_region_bbox_repetitive_loss(prompts, completions, width=None, height=None, normalized_bboxs=False, **kwargs):
+    """Penalty for repeating identical bounding boxes in the completion."""
+    rewards = []
+    width_list = width or [None] * len(completions)
+    height_list = height or [None] * len(completions)
+    for response, img_w, img_h in zip(completions, width_list, height_list):
+        pred_boxes = _extract_bboxes_from_text(response)
+        if normalized_bboxs and img_w and img_h:
+            pred_boxes = [
+                [box[0] * img_w, box[1] * img_h, box[2] * img_w, box[3] * img_h]
+                for box in pred_boxes
+            ]
+
+        pred_rects = []
+        for box in pred_boxes:
+            rect = _sanitize_bbox(box)
+            if rect:
+                pred_rects.append(rect)
+
+        if len(pred_rects) < 2:
+            rewards.append(0.0)
+            continue
+
+        rounded = [tuple(int(round(value)) for value in rect) for rect in pred_rects]
+        total = len(rounded)
+        unique = len(set(rounded))
+        repeat_ratio = 1.0 - (unique / total)
+        rewards.append(-repeat_ratio)
+
+    return rewards

@@ -1087,6 +1087,7 @@ class GRPOGRTrainer(Trainer):
         # get grounded_region_specific_thinking_format_reward if exists
         idx_grounded_region_specific_thinking_format_reward = None
         idx_grounded_region_bbox_IOU_loss = None
+        idx_grounded_region_bbox_giou_reward = None
         idx_grounded_region_bbox_repetitive_loss = None
         idx_answer_format_reward = None
         idx_gpt_reward = None
@@ -1103,6 +1104,8 @@ class GRPOGRTrainer(Trainer):
                 idx_gpt_reward = i
             elif 'grounded_region_bbox_IOU_loss' in reward_func_name:
                 idx_grounded_region_bbox_IOU_loss = i
+            elif 'grounded_region_bbox_giou' in reward_func_name:
+                idx_grounded_region_bbox_giou_reward = i
             elif 'grounded_region_bbox_repetitive_loss' in reward_func_name:
                 idx_grounded_region_bbox_repetitive_loss = i
             elif 'answer_format' in reward_func_name:
@@ -1120,6 +1123,8 @@ class GRPOGRTrainer(Trainer):
         if idx_grounded_region_bbox_IOU_loss is not None:
             # make the bbox IOU loss excluded from training loss but just a evaluation metrics
             rewards_per_func[:, idx_grounded_region_bbox_IOU_loss] = 0 *  rewards_per_func[:, idx_grounded_region_bbox_IOU_loss]
+        if idx_grounded_region_bbox_giou_reward is not None:
+            rewards_per_func[:, idx_grounded_region_bbox_giou_reward] = 0 * rewards_per_func[:, idx_grounded_region_bbox_giou_reward]
 
         rewards = rewards_per_func.sum(dim=1)
 
