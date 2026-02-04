@@ -9,7 +9,9 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 from rewards import (
     gpt_score_reward, gpt_score_reward_1, bleu_score_reward, answer_format_reward,repetitive_reward,
     grounded_region_specific_thinking_format_reward_think_rethink,
-    think_and_rethink_format_reward, answer_correctness_reward #modified
+    think_and_rethink_format_reward, answer_correctness_reward, #modified
+    grounded_region_bbox_giou_reward,
+    grounded_region_bbox_repetitive_loss,
     
 )
 from GRPO_GRTrainer import GRPOGRTrainer
@@ -137,6 +139,8 @@ if __name__ == "__main__":
         if '_think_rethink' in training_args.setting:
             REWARD_FUNCS_REGISTRY["JSON_format_reward"] = grounded_region_specific_thinking_format_reward_think_rethink
             REWARD_FUNCS_REGISTRY["think_format_reward"] = think_and_rethink_format_reward
+            REWARD_FUNCS_REGISTRY["grounded_region_bbox_giou_reward"] = grounded_region_bbox_giou_reward
+            REWARD_FUNCS_REGISTRY["grounded_region_bbox_repetitive_loss"] = grounded_region_bbox_repetitive_loss
 
         if 'vanilla_zeroshot' in training_args.setting:
             REWARD_FUNCS_REGISTRY["answer_gpt_accuracy"] = gpt_score_reward_1
