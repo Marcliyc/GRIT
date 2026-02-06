@@ -1006,6 +1006,9 @@ class GRPOGRTrainer(Trainer):
                 # Repeat all input columns (but "message" and "completion") to match the number of generations
                 keys = [key for key in inputs[0] if key not in ["message", "completion"]]
                 reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
+                reward_kwargs["eos_token_id"] = getattr(self.processing_class, "eos_token_id", None)
+                reward_kwargs["pad_token_id"] = getattr(self.processing_class, "pad_token_id", None)
+                reward_kwargs["answer_end_token_ids"] = self.processing_class.encode("</answer>", add_special_tokens=False)
                 if "internvl" in self.model_id.lower():
                     reward_kwargs["normalized_bboxs"] = True
                 output_reward_func = reward_func(prompts=original_prompts, completions=completions, completion_ids = completion_ids, **reward_kwargs)
@@ -1025,6 +1028,7 @@ class GRPOGRTrainer(Trainer):
         # get grounded_region_specific_thinking_format_reward if exists
         idx_grounded_region_specific_thinking_format_reward = None
         idx_grounded_region_bbox_IOU_loss = None
+        idx_grounded_region_bbox_giou_reward = None
         idx_grounded_region_bbox_repetitive_loss = None
         idx_answer_format_reward = None
         idx_gpt_reward = None
@@ -1041,6 +1045,8 @@ class GRPOGRTrainer(Trainer):
                 idx_gpt_reward = i
             elif 'grounded_region_bbox_IOU_loss' in reward_func_name:
                 idx_grounded_region_bbox_IOU_loss = i
+            elif 'grounded_region_bbox_giou' in reward_func_name:
+                idx_grounded_region_bbox_giou_reward = i
             elif 'grounded_region_bbox_repetitive_loss' in reward_func_name:
                 idx_grounded_region_bbox_repetitive_loss = i
             elif 'answer_format' in reward_func_name:
@@ -1058,6 +1064,8 @@ class GRPOGRTrainer(Trainer):
         if idx_grounded_region_bbox_IOU_loss is not None:
             # make the bbox IOU loss excluded from training loss but just a evaluation metrics
             rewards_per_func[:, idx_grounded_region_bbox_IOU_loss] = 0 *  rewards_per_func[:, idx_grounded_region_bbox_IOU_loss]
+        if idx_grounded_region_bbox_giou_reward is not None:
+            rewards_per_func[:, idx_grounded_region_bbox_giou_reward] = 0 * rewards_per_func[:, idx_grounded_region_bbox_giou_reward]
 
         rewards = rewards_per_func.sum(dim=1)
 
