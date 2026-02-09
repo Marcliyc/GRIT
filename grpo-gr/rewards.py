@@ -6,6 +6,7 @@ import re
 import numpy as np
 import json
 import re
+from scipy.optimize import linear_sum_assignment
 from collections import defaultdict
 
 import nltk
@@ -597,5 +598,99 @@ def grounded_region_bbox_repetitive_loss(prompts, completions, width=None, heigh
         unique = len(set(rounded))
         repeat_ratio = 1.0 - (unique / total)
         rewards.append(-repeat_ratio)
+
+    return rewards
+
+
+def _giou(rect_a, rect_b):
+    ax1, ay1, ax2, ay2 = rect_a
+    bx1, by1, bx2, by2 = rect_b
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+    intersection = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - intersection
+    if union <= 0:
+        return 0.0
+    iou = intersection / union
+    cx1 = min(ax1, bx1)
+    cy1 = min(ay1, by1)
+    cx2 = max(ax2, bx2)
+    cy2 = max(ay2, by2)
+    c_area = max(0.0, cx2 - cx1) * max(0.0, cy2 - cy1)
+    if c_area <= 0:
+        return iou
+    return iou - (c_area - union) / c_area
+
+
+def _pairwise_giou(pred_rects, gt_rects):
+    if not pred_rects or not gt_rects:
+        return np.zeros((len(pred_rects), len(gt_rects)), dtype=np.float32)
+    giou_matrix = np.zeros((len(pred_rects), len(gt_rects)), dtype=np.float32)
+    for i, pred in enumerate(pred_rects):
+        for j, gt in enumerate(gt_rects):
+            giou_matrix[i, j] = _giou(pred, gt)
+    return giou_matrix
+
+
+def grounded_region_bbox_hungarian_giou_reward(
+    prompts,
+    completions,
+    bboxs=None,
+    width=None,
+    height=None,
+    normalized_bboxs=False,
+    redundant_penalty=0.05,
+    **kwargs,
+):
+    """Reward using Hungarian matching and per-target GIoU with redundant prediction penalty."""
+    rewards = []
+    width_list = width or [None] * len(completions)
+    height_list = height or [None] * len(completions)
+    for response, gt_boxes, img_w, img_h in zip(completions, bboxs, width_list, height_list):
+        if not gt_boxes:
+            rewards.append(0.0)
+            continue
+
+        pred_boxes = _extract_bboxes_from_text(response)
+        if normalized_bboxs and img_w and img_h:
+            pred_boxes = [
+                [box[0] * img_w, box[1] * img_h, box[2] * img_w, box[3] * img_h]
+                for box in pred_boxes
+            ]
+
+        pred_rects = []
+        for box in pred_boxes:
+            rect = _sanitize_bbox(box)
+            if rect:
+                pred_rects.append(rect)
+
+        gt_rects = []
+        for box in gt_boxes:
+            rect = _sanitize_bbox(box)
+            if rect:
+                gt_rects.append(rect)
+
+        if not gt_rects:
+            rewards.append(0.0)
+            continue
+
+        if not pred_rects:
+            rewards.append(0.0)
+            continue
+
+        giou_matrix = _pairwise_giou(pred_rects, gt_rects)
+        cost_matrix = 1.0 - giou_matrix
+        row_ind, col_ind = linear_sum_assignment(cost_matrix)
+
+        matched_giou = {gt_idx: giou_matrix[pred_idx, gt_idx] for pred_idx, gt_idx in zip(row_ind, col_ind)}
+        redundant_count = max(0, len(pred_rects) - len(row_ind))
+
+        per_target_scores = [matched_giou.get(gt_idx, 0.0) for gt_idx in range(len(gt_rects))]
+        avg_giou = float(np.mean(per_target_scores)) if per_target_scores else 0.0
+        rewards.append(avg_giou - redundant_penalty * redundant_count)
 
     return rewards
