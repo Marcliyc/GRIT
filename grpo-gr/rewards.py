@@ -502,7 +502,7 @@ def _intersection_union_areas(pred_rects, gt_rects):
     return intersection_area, union_area
 
 
-def grounded_region_bbox_giou_reward(prompts, completions, bboxs, width=None, height=None, normalized_bboxs=False, **kwargs):
+def grounded_region_bbox_giou_reward(prompts, completions, bboxs=None, width=None, height=None, normalized_bboxs=False, use_giou=False, **kwargs):
     """Reward based on generalized IoU (GIoU) between predicted and ground-truth bbox unions."""
     rewards = []
     width_list = width or [None] * len(completions)
@@ -541,18 +541,30 @@ def grounded_region_bbox_giou_reward(prompts, completions, bboxs, width=None, he
             continue
 
         iou = intersection_area / union_area
-        all_rects = pred_rects + gt_rects
-        x_min = min(rect[0] for rect in all_rects)
-        y_min = min(rect[1] for rect in all_rects)
-        x_max = max(rect[2] for rect in all_rects)
-        y_max = max(rect[3] for rect in all_rects)
-        c_area = max(0.0, (x_max - x_min) * (y_max - y_min))
-        if c_area <= 0:
-            rewards.append(0.0)
-            continue
+        # all_rects = pred_rects + gt_rects
+        # x_min = min(rect[0] for rect in all_rects)
+        # y_min = min(rect[1] for rect in all_rects)
+        # x_max = max(rect[2] for rect in all_rects)
+        # y_max = max(rect[3] for rect in all_rects)
+        # c_area = max(0.0, (x_max - x_min) * (y_max - y_min))
+        # if c_area <= 0:
+        #     rewards.append(0.0)
+        #     continue
 
-        giou = iou - (c_area - union_area) / c_area
-        rewards.append(giou)
+        if use_giou:
+            all_rects = pred_rects + gt_rects
+            x_min = min(rect[0] for rect in all_rects)
+            y_min = min(rect[1] for rect in all_rects)
+            x_max = max(rect[2] for rect in all_rects)
+            y_max = max(rect[3] for rect in all_rects)
+            c_area = max(0.0, (x_max - x_min) * (y_max - y_min))
+            if c_area <= 0:
+                rewards.append(0.0)
+                continue
+            giou = iou - (c_area - union_area) / c_area
+            rewards.append(giou)
+        else:
+            rewards.append(iou)
 
     return rewards
 

@@ -51,6 +51,10 @@ class VLToolGRPOConfig(GRPOConfig):
     epsilon_clip: float = 0.28
     top_p: float = 0.9
     top_k: int = 30
+    iou_train: bool = False
+    use_giou: bool = False
+    wandb_run_id: str = field(default="",metadata={"help":"W&B run ID to continue logging to an existing run."})
+    wandb_resume: str = field(default="",metadata={"help":"W&B resume mode, eg. allow/must/never."})
     
     # InternVL3-specific parameters
     force_image_size: int = field(default=448, metadata={"help": "Forced resize image dimension."})
@@ -67,7 +71,11 @@ class VLToolGRPOConfig(GRPOConfig):
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, VLToolGRPOConfig, ModelConfig)) 
     script_args, training_args, model_args = parser.parse_args_into_dataclasses()
-    if accelerator.is_main_process:
+    if training_args.wandb_run_id:
+        os.environ["WANDB_RUN_ID"] = training_args.wandb_run_id
+    if training_args.wandb_resume:
+        os.environ["WANDB_RESUME"] = training_args.wandb_resume
+    if accelerator.is_main_process and training_args.resume_from_checkpoint is None and getattr(training_args,"overwrite_output_dir",False):
         
         shutil.rmtree(training_args.output_dir, ignore_errors=True)
         
@@ -83,7 +91,7 @@ if __name__ == "__main__":
             prompt = ""
             if '_think_rethink' in training_args.setting:
                 prompt_suffix = ''' First, think between <think> and </think> while output necessary coordinates needed to answer the question in JSON with key 'bbox_2d'. Then, based on the thinking contents and coordinates, rethink between <rethink> </rethink> and then answer the question after <answer>.\n'''
-                if '_med_' in training_args.setting:
+                if 'med_' in training_args.setting:
                     prompt_suffix = ''' First, think between <think> and </think> while output necessary coordinates needed to answer the question in JSON with key 'bbox_2d'. Make sure that each bounding box defined by the coordinates contains only one cell or object. Then, based on the thinking contents and coordinates, rethink between <rethink> </rethink> and then answer the question after <answer>.\n'''
 
 
@@ -140,7 +148,8 @@ if __name__ == "__main__":
             REWARD_FUNCS_REGISTRY["JSON_format_reward"] = grounded_region_specific_thinking_format_reward_think_rethink
             REWARD_FUNCS_REGISTRY["think_format_reward"] = think_and_rethink_format_reward
             REWARD_FUNCS_REGISTRY["grounded_region_bbox_giou_reward"] = grounded_region_bbox_giou_reward
-            REWARD_FUNCS_REGISTRY["grounded_region_bbox_repetitive_loss"] = grounded_region_bbox_repetitive_loss
+            if '_repet' in training_args.setting: 
+                REWARD_FUNCS_REGISTRY["grounded_region_bbox_repetitive_loss"] = grounded_region_bbox_repetitive_loss
 
         if 'vanilla_zeroshot' in training_args.setting:
             REWARD_FUNCS_REGISTRY["answer_gpt_accuracy"] = gpt_score_reward_1
@@ -155,7 +164,7 @@ if __name__ == "__main__":
     end_flag = False
     if os.path.exists(training_args.output_dir):
         checkpoint_list = [d for d in os.listdir(training_args.output_dir) if d.endswith('end_of_training.txt')]
-        if len(checkpoint_list) > 0:
+        if len(checkpoint_list) > 0 and training_args.resume_from_checkpoint is None:
             print(f"Training has been finished. Please remove {training_args.output_dir} to continue training.")
             end_flag = True
         
@@ -178,7 +187,7 @@ if __name__ == "__main__":
         if training_args.eval_only:
             trainer.evaluate()
         else:
-            trainer.train()
+            trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
 
         # save a mark for the end of training
         with open(os.path.join(training_args.output_dir, "end_of_training.txt"), "w") as f:

@@ -191,7 +191,7 @@ class GRPOGRTrainer(Trainer):
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         max_pixels: Optional[int] = 256*28*28, #12845056,
         min_pixels: Optional[int] = 3136,
-        attn_implementation: str = 'sdpa',#"flash_attention_2", #"sdpa",
+        attn_implementation: str = "flash_attention_2", #"sdpa",
         tool_model_id: Optional[str] = 'IDEA-Research/grounding-dino-base',
     ):
         # Args
@@ -1070,6 +1070,8 @@ class GRPOGRTrainer(Trainer):
                 reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
                 if "internvl" in self.model_id.lower():
                     reward_kwargs["normalized_bboxs"] = True
+                if self.args.use_giou:
+                    reward_kwargs["use_giou"] = True
                 output_reward_func = reward_func(prompts=original_prompts, completions=completions, completion_ids = completion_ids, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
             
@@ -1120,10 +1122,10 @@ class GRPOGRTrainer(Trainer):
         if idx_gpt_reward is not None:
             rewards_per_func[:, idx_gpt_reward] = torch.where(rewards_per_func[:, idx_gpt_reward] > 0, 1.0, 0.0)
 
-        if idx_grounded_region_bbox_IOU_loss is not None:
-            # make the bbox IOU loss excluded from training loss but just a evaluation metrics
-            rewards_per_func[:, idx_grounded_region_bbox_IOU_loss] = 0 *  rewards_per_func[:, idx_grounded_region_bbox_IOU_loss]
-        if idx_grounded_region_bbox_giou_reward is not None:
+        # if idx_grounded_region_bbox_IOU_loss is not None:
+        #     # make the bbox IOU loss excluded from training loss but just a evaluation metrics
+        #     rewards_per_func[:, idx_grounded_region_bbox_IOU_loss] = 0 *  rewards_per_func[:, idx_grounded_region_bbox_IOU_loss]
+        if idx_grounded_region_bbox_giou_reward is not None and self.args.iou_train == False:
             rewards_per_func[:, idx_grounded_region_bbox_giou_reward] = 0 * rewards_per_func[:, idx_grounded_region_bbox_giou_reward]
 
         rewards = rewards_per_func.sum(dim=1)
