@@ -602,7 +602,7 @@ def grounded_region_bbox_repetitive_loss(prompts, completions, width=None, heigh
     return rewards
 
 
-def _giou(rect_a, rect_b):
+def _giou(rect_a, rect_b, use_giou=True):
     ax1, ay1, ax2, ay2 = rect_a
     bx1, by1, bx2, by2 = rect_b
     ix1 = max(ax1, bx1)
@@ -616,6 +616,8 @@ def _giou(rect_a, rect_b):
     if union <= 0:
         return 0.0
     iou = intersection / union
+    if not use_giou:
+        return iou
     cx1 = min(ax1, bx1)
     cy1 = min(ay1, by1)
     cx2 = max(ax2, bx2)
@@ -626,13 +628,13 @@ def _giou(rect_a, rect_b):
     return iou - (c_area - union) / c_area
 
 
-def _pairwise_giou(pred_rects, gt_rects):
+def _pairwise_giou(pred_rects, gt_rects, use_giou=True):
     if not pred_rects or not gt_rects:
         return np.zeros((len(pred_rects), len(gt_rects)), dtype=np.float32)
     giou_matrix = np.zeros((len(pred_rects), len(gt_rects)), dtype=np.float32)
     for i, pred in enumerate(pred_rects):
         for j, gt in enumerate(gt_rects):
-            giou_matrix[i, j] = _giou(pred, gt)
+            giou_matrix[i, j] = _giou(pred, gt, use_giou=True)
     return giou_matrix
 
 
@@ -644,6 +646,7 @@ def grounded_region_bbox_hungarian_giou_reward(
     height=None,
     normalized_bboxs=False,
     redundant_penalty=0.05,
+    use_giou=True,
     **kwargs,
 ):
     """Reward using Hungarian matching and per-target GIoU with redundant prediction penalty."""
@@ -682,15 +685,21 @@ def grounded_region_bbox_hungarian_giou_reward(
             rewards.append(0.0)
             continue
 
-        giou_matrix = _pairwise_giou(pred_rects, gt_rects)
+        giou_matrix = _pairwise_giou(pred_rects, gt_rects, use_giou=use_giou)
         cost_matrix = 1.0 - giou_matrix
+        if hasattr(cost_matrix,"detach"):
+            cost_matrix = cost_matrix.detach().cpu().numpy()
+        else:
+            cost_matrix = np.asarray(cost_matrix)
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
         matched_giou = {gt_idx: giou_matrix[pred_idx, gt_idx] for pred_idx, gt_idx in zip(row_ind, col_ind)}
-        redundant_count = max(0, len(pred_rects) - len(row_ind))
 
         per_target_scores = [matched_giou.get(gt_idx, 0.0) for gt_idx in range(len(gt_rects))]
         avg_giou = float(np.mean(per_target_scores)) if per_target_scores else 0.0
-        rewards.append(avg_giou - redundant_penalty * redundant_count)
+        if redundant_penalty != 0:
+            redundant_count = max(0, len(pred_rects) - len(row_ind))
+            avg_giou -= redundant_penalty * redundant_count
+        rewards.append(avg_giou)
 
     return rewards

@@ -340,7 +340,7 @@ class GRPOGRTrainer(Trainer):
                 tokenizer = AutoTokenizer.from_pretrained(
                     tokenizer_path, add_eos_token=False, trust_remote_code=True, use_fast=False)
                 tokenizer.tokenizer_path = tokenizer_path
-                tokenizer.model_max_length = args.max_prompt_length
+                #tokenizer.model_max_length = args.max_prompt_length
                 token_list = [IMG_START_TOKEN, IMG_END_TOKEN, IMG_CONTEXT_TOKEN,
                             QUAD_START_TOKEN, QUAD_END_TOKEN, REF_START_TOKEN,
                             REF_END_TOKEN, BOX_START_TOKEN, BOX_END_TOKEN]
@@ -412,7 +412,7 @@ class GRPOGRTrainer(Trainer):
             return features
 
         # Training arguments
-        self.max_prompt_length = args.max_prompt_length
+        self.max_prompt_length = None #args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.use_vllm = args.use_vllm
@@ -802,9 +802,9 @@ class GRPOGRTrainer(Trainer):
             
 
             if j == 0:
-                if latest_prompt_ids.size(1) > self.max_prompt_length:
-                    # we do not trip the input in case the image token is in complete
-                    print(f"Warning: prompt length {latest_prompt_ids.size(1)} exceeds the maximum prompt length {self.max_prompt_length}. Truncating.")
+                # if latest_prompt_ids.size(1) > self.max_prompt_length:
+                #     # we do not trip the input in case the image token is in complete
+                #     print(f"Warning: prompt length {latest_prompt_ids.size(1)} exceeds the maximum prompt length {self.max_prompt_length}. Truncating.")
                 original_prompt_ids = latest_prompt_ids.clone()
                 original_prompt_mask = latest_prompt_mask.clone()
                 
@@ -1068,10 +1068,12 @@ class GRPOGRTrainer(Trainer):
                 # Repeat all input columns (but "message" and "completion") to match the number of generations
                 keys = [key for key in inputs[0] if key not in ["message", "completion"]]
                 reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
+                reward_kwargs["normalized_bboxs"] = False
                 if "internvl" in self.model_id.lower():
                     reward_kwargs["normalized_bboxs"] = True
-                if self.args.use_giou:
-                    reward_kwargs["use_giou"] = True
+                
+                reward_kwargs["use_giou"] = getattr(self.args,'use_giou',False)
+                reward_kwargs["redundant_penalty"] = getattr(self.args,'redundant_penalty',0.0)
                 output_reward_func = reward_func(prompts=original_prompts, completions=completions, completion_ids = completion_ids, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
             

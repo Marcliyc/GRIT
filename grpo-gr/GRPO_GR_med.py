@@ -12,6 +12,7 @@ from rewards import (
     think_and_rethink_format_reward, answer_correctness_reward, #modified
     grounded_region_bbox_giou_reward,
     grounded_region_bbox_repetitive_loss,
+    grounded_region_bbox_hungarian_giou_reward
     
 )
 from GRPO_GRTrainer import GRPOGRTrainer
@@ -53,6 +54,7 @@ class VLToolGRPOConfig(GRPOConfig):
     top_k: int = 30
     iou_train: bool = False
     use_giou: bool = False
+    redundant_penalty: float = 0.0
     wandb_run_id: str = field(default="",metadata={"help":"W&B run ID to continue logging to an existing run."})
     wandb_resume: str = field(default="",metadata={"help":"W&B resume mode, eg. allow/must/never."})
     
@@ -147,7 +149,10 @@ if __name__ == "__main__":
         if '_think_rethink' in training_args.setting:
             REWARD_FUNCS_REGISTRY["JSON_format_reward"] = grounded_region_specific_thinking_format_reward_think_rethink
             REWARD_FUNCS_REGISTRY["think_format_reward"] = think_and_rethink_format_reward
-            REWARD_FUNCS_REGISTRY["grounded_region_bbox_giou_reward"] = grounded_region_bbox_giou_reward
+            if 'matched' in training_args.setting:
+                REWARD_FUNCS_REGISTRY["grounded_region_bbox_giou_reward"] = grounded_region_bbox_hungarian_giou_reward
+            else:
+                REWARD_FUNCS_REGISTRY["grounded_region_bbox_giou_reward"] = grounded_region_bbox_giou_reward
             if '_repet' in training_args.setting: 
                 REWARD_FUNCS_REGISTRY["grounded_region_bbox_repetitive_loss"] = grounded_region_bbox_repetitive_loss
 
