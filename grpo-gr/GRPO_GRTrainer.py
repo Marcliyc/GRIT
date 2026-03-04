@@ -27,6 +27,7 @@ from torch.utils.data import Sampler
 from transformers import (
     AutoModelForCausalLM,
     Qwen2_5_VLForConditionalGeneration,
+    Qwen3_5ForConditionalGeneration,
     #Qwen3_VLForConditionalGeneration,
     AutoModelForSequenceClassification,
     AutoModelForImageTextToText,
@@ -260,8 +261,21 @@ class GRPOGRTrainer(Trainer):
 
         # if "qwen3" in model_id.lower():
         #     model = Qwen3_VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
+
+        def _get_qwen_model_class(model_id_or_path):
+            model_name = model_id_or_path.lower()
+            if any(tag in model_name for tag in ("qwen3.5", "qwen-3.5", "qwen3_5")):
+                return Qwen3_5ForConditionalGeneration
+            return Qwen2_5_VLForConditionalGeneration
+
+        def _get_qwen_processor_fallback(model_id_or_path):
+            model_name = model_id_or_path.lower()
+            if any(tag in model_name for tag in ("qwen3.5", "qwen-3.5", "qwen3_5")):
+                return "Qwen/Qwen3.5-VL-4B-Instruct"
+            return "Qwen/Qwen2.5-VL-3B-Instruct"
         if "qwen" in model_id.lower():
-            model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
+            qwen_model_cls = _get_qwen_model_class(model_id)
+            model = qwen_model_cls.from_pretrained(model, **model_init_kwargs)
         elif "internvl" in model_id.lower():
             config = InternVLChatConfig.from_pretrained(model_id)
             if config.llm_config.model_type == 'internlm2':
@@ -294,7 +308,7 @@ class GRPOGRTrainer(Trainer):
             # if "qwen3" in model_id.lower():
             #     self.ref_model = Qwen3_VLForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
             if "qwen" in model_id.lower():
-                self.ref_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model_id, **model_init_kwargs)
+                self.ref_model = qwen_model_cls.from_pretrained(model_id, **model_init_kwargs)
             elif "internvl" in model_id.lower():
                 self.ref_model = InternVLChatModel.from_pretrained(
                 model_id, torch_dtype=torch.bfloat16, config=config)
@@ -325,7 +339,7 @@ class GRPOGRTrainer(Trainer):
                     # if "qwen3" in model_id.lower():
                     #     processing_class = AutoProcessor.from_pretrained('Qwen/Qwen3-VL-2B-Instruct')
                     # else:
-                    processing_class = AutoProcessor.from_pretrained('Qwen/Qwen2.5-VL-3B-Instruct')
+                    processing_class = AutoProcessor.from_pretrained(_get_qwen_processor_fallback(model_id))
                 
                 processing_class.pad_token_id = processing_class.tokenizer.pad_token_id
                 processing_class.eos_token_id = processing_class.tokenizer.eos_token_id

@@ -73,6 +73,10 @@ class VLToolGRPOConfig(GRPOConfig):
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, VLToolGRPOConfig, ModelConfig)) 
     script_args, training_args, model_args = parser.parse_args_into_dataclasses()
+    if not model_args.model_name_or_path:
+        model_args.model_name_or_path = "Qwen/Qwen3.5-VL-4B-Instruct"
+        if accelerator.is_main_process:
+            print(f"model_name_or_path was not provided. Defaulting to {model_args.model_name_or_path}.")
     if training_args.wandb_run_id:
         os.environ["WANDB_RUN_ID"] = training_args.wandb_run_id
     if training_args.wandb_resume:
