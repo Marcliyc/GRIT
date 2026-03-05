@@ -17,6 +17,7 @@ Reference here:
 GRIT-Med is a method based on GRIT with modified reward functions and training method for medical problems. This repo currently contains code used for blood smear microscopy. As a starting point, we tested models' ability to count RBC/WBC/PC in the images.
 
 ## Examples of GRIT's Grounded Reasoning
+<img src="readme_images/table.png" alt="Results" width="1000">
 
 <img src="readme_images/eg11.png" alt="Grounded reasoning example" width="1000">
 
@@ -24,8 +25,6 @@ GRIT-Med is a method based on GRIT with modified reward functions and training m
 <summary>More examples (click to expand)</summary>
 
 <img src="readme_images/eg22.png" alt="Grounded reasoning example 2" width="1000">
-
-<img src="readme_images/table.png" alt="Results" width="1000">
 
 </details>
 
