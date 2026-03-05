@@ -16,14 +16,14 @@
 
 ## Examples of GRIT's Grounded Reasoning
 
-<img src="readme_images/eg1.png" alt="Example 1" width="800">
+<img src="readme_images/eg1.png" alt="Grounded reasoning example" width="1000">
 
 <details>
 <summary>More examples (click to expand)</summary>
 
-<img src="readme_images/eg2.png" alt="Example 2" width="800">
+<img src="readme_images/eg2.png" alt="Grounded reasoning example 2" width="1000">
 
-<img src="readme_images/eg3.png" alt="Example 3" width="800">
+<img src="readme_images/eg3.png" alt="Grounded reasoning example 3" width="1000">
 
 </details>
 
