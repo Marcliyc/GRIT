@@ -1,7 +1,7 @@
-# GRIT: Teaching MLLMs to Think with Images
+# GRIT-Med: Teaching MLLMs to Write Reasonable Diagnosis
 
-**Grounded Reasoning wiht Texts and Images (GRIT)** is a novel method for training Multimodal Large Language Models (MLLMs) to perform grounded reasoning by generating reasoning chains that interleave natural language and explicit bounding box coordinates. This approach can use as few as **20 training data samples** to enable models to ground their reasoning in specific image regions, achieving a **unified grounding and reasoning ability**.
-
+**Grounded Reasoning wiht Texts and Images (GRIT)** was a novel method for training Multimodal Large Language Models (MLLMs) to perform grounded reasoning by generating reasoning chains that interleave natural language and explicit bounding box coordinates. This approach can use as few as **20 training data samples** to enable models to ground their reasoning in specific image regions, achieving a **unified grounding and reasoning ability**.
+Reference here:
 <div align="center">
   <a href="https://arxiv.org/abs/2505.15879">
     <img src="https://img.shields.io/badge/Paper-arXiv-red?style=flat-square" alt="Paper">
@@ -14,16 +14,17 @@
   </a>
 </div>
 
-## Examples of GRIT's Grounded Reasoning
+GRIT-Med is a method based on GRIT with modified reward functions and training method for medical problems. This repo currently contains code used for blood smear microscopy. As a starting point, we tested models' ability to count RBC/WBC/PC in the images.
 
-<img src="readme_images/eg1.png" alt="Example 1" width="800">
+## Examples of GRIT's Grounded Reasoning
+<img src="readme_images/table.png" alt="Results" width="1000">
+
+<img src="readme_images/eg11.png" alt="Grounded reasoning example" width="1000">
 
 <details>
 <summary>More examples (click to expand)</summary>
 
-<img src="readme_images/eg2.png" alt="Example 2" width="800">
-
-<img src="readme_images/eg3.png" alt="Example 3" width="800">
+<img src="readme_images/eg22.png" alt="Grounded reasoning example 2" width="1000">
 
 </details>
 
