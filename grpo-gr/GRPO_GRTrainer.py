@@ -236,9 +236,11 @@ class GRPOGRTrainer(Trainer):
                 f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
             )
         # Disable caching if gradient checkpointing is enabled (not supported)
-        model_init_kwargs["use_cache"] = (
-            False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
-        )
+        # model_init_kwargs["use_cache"] = (
+        #     False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
+        # )
+        if 'use_cache' in model_init_kwargs:
+            del model_init_kwargs['use_cache']
         print('Gradient Checkpointing:',args.gradient_checkpointing)
 
         def _load_gemma_model(model_id_or_path, init_kwargs):
@@ -274,6 +276,8 @@ class GRPOGRTrainer(Trainer):
                 return "Qwen/Qwen3.5-VL-4B-Instruct"
             return "Qwen/Qwen2.5-VL-3B-Instruct"
         if "qwen" in model_id.lower():
+            if "qwen3" in model_id.lower() and 'use_cache' in model_init_kwargs:
+                del model_init_kwargs['use_cache']
             qwen_model_cls = _get_qwen_model_class(model_id)
             model = qwen_model_cls.from_pretrained(model, **model_init_kwargs)
         elif "internvl" in model_id.lower():
@@ -438,6 +442,10 @@ class GRPOGRTrainer(Trainer):
         # "Could not estimate the number of tokens of the input, floating-point operations will not be computed." To
         # suppress this warning, we set the "estimate_tokens" key in the model's "warnings_issued" dictionary to True.
         # This acts as a flag to indicate that the warning has already been issued.
+        # Safely initialize the dictionary if it doesn't exist yet
+        if not hasattr(model, "warnings_issued"):
+            model.warnings_issued = {}
+            
         model.warnings_issued["estimate_tokens"] = True
 
         # Initialize the metrics

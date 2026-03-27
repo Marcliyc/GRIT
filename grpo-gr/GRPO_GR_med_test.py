@@ -73,6 +73,10 @@ class VLToolGRPOConfig(GRPOConfig):
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, VLToolGRPOConfig, ModelConfig)) 
     script_args, training_args, model_args = parser.parse_args_into_dataclasses()
+    if not model_args.model_name_or_path:
+        model_args.model_name_or_path = "Qwen/Qwen3.5-VL-4B-Instruct"
+        if accelerator.is_main_process:
+            print(f"model_name_or_path was not provided. Defaulting to {model_args.model_name_or_path}.")
     if training_args.wandb_run_id:
         os.environ["WANDB_RUN_ID"] = training_args.wandb_run_id
     if training_args.wandb_resume:
@@ -140,8 +144,8 @@ if __name__ == "__main__":
         #################
         REWARD_FUNCS_REGISTRY = {
             #"answer_gpt_accuracy": gpt_score_reward,
-            "answer_blue_score": bleu_score_reward,
-            "answer_correctness_reward": answer_correctness_reward, #modified
+            #"answer_blue_score": bleu_score_reward,
+            #"answer_correctness_reward": answer_correctness_reward, #modified
             "answer_format_reward": answer_format_reward,
             "repetitive_reward": repetitive_reward,
         }
@@ -189,10 +193,11 @@ if __name__ == "__main__":
             #peft_config=peft_config,   
         ))
 
-        if training_args.eval_only:
-            trainer.evaluate()
-        else:
-            trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
+        trainer.evaluate()
+        # if training_args.eval_only:
+        #     trainer.evaluate()
+        # else:
+        #     trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
 
         # save a mark for the end of training
         with open(os.path.join(training_args.output_dir, "end_of_training.txt"), "w") as f:
