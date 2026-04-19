@@ -275,12 +275,18 @@ class GRPOGRTrainer(Trainer):
             if any(tag in model_name for tag in ("qwen3.5", "qwen-3.5", "qwen3_5")):
                 return "Qwen/Qwen3.5-VL-4B-Instruct"
             return "Qwen/Qwen2.5-VL-3B-Instruct"
+        def _is_it2t_family(model_id_or_path):
+            model_name = model_id_or_path.lower()
+            return any(tag in model_name for tag in ("gemma", "chexone"))
+
         if "qwen" in model_id.lower():
+            self.model_family = "qwen"
             if "qwen3" in model_id.lower() and 'use_cache' in model_init_kwargs:
                 del model_init_kwargs['use_cache']
             qwen_model_cls = _get_qwen_model_class(model_id)
             model = qwen_model_cls.from_pretrained(model, **model_init_kwargs)
         elif "internvl" in model_id.lower():
+            self.model_family = "internvl"
             config = InternVLChatConfig.from_pretrained(model_id)
             if config.llm_config.model_type == 'internlm2':
                 config.llm_config.attn_implementation = 'flash_attention_2'  # for InternLM
@@ -302,7 +308,13 @@ class GRPOGRTrainer(Trainer):
                 model.config.vision_config.image_size = args.force_image_size
             model.config.force_image_size = args.force_image_size
             model.num_image_token = int((args.force_image_size // patch_size) ** 2 * (args.down_sample_ratio ** 2))
-        elif "gemma" in model_id.lower():
+        elif _is_it2t_family(model_id):
+            self.model_family = "it2t"
+            model = _load_gemma_model(model, model_init_kwargs)
+            if args.gradient_checkpointing:
+                model.config.use_cache = False
+        else:
+            self.model_family = "it2t"
             model = _load_gemma_model(model, model_init_kwargs)
             if args.gradient_checkpointing:
                 model.config.use_cache = False
@@ -326,7 +338,7 @@ class GRPOGRTrainer(Trainer):
                     self.ref_model.config.vision_config.image_size = args.force_image_size
                 self.ref_model.config.force_image_size = args.force_image_size
                 self.ref_model.num_image_token = int((args.force_image_size // patch_size) ** 2 * (args.down_sample_ratio ** 2))    
-            elif "gemma" in model_id.lower():
+            elif self.model_family == "it2t":
                 self.ref_model = _load_gemma_model(model_id, model_init_kwargs)
                 if args.gradient_checkpointing:
                     self.ref_model.config.use_cache = False
@@ -384,7 +396,7 @@ class GRPOGRTrainer(Trainer):
                 self.ref_model.language_model.config.use_cache = False
                 self.ref_model.vision_model.gradient_checkpointing = True
                 self.ref_model.vision_model.encoder.gradient_checkpointing = True
-            elif "gemma" in model_id.lower():
+            elif self.model_family == "it2t":
                 processing_class = AutoProcessor.from_pretrained(model_id)
                 if processing_class.tokenizer.pad_token_id is None:
                     processing_class.tokenizer.pad_token = processing_class.tokenizer.eos_token
@@ -532,10 +544,10 @@ class GRPOGRTrainer(Trainer):
         
         to_phrase = "Wait, I need to think again. "
         from_phrase = "<rethink>\n"
-        if "qwen" in model_id.lower() or "gemma" in model_id.lower():
+        if self.model_family in ("qwen", "it2t"):
             self.eos_token_id = processing_class.tokenizer.eos_token_id
             self.pad_token_id = processing_class.tokenizer.pad_token_id
-        elif "internvl" in model_id.lower():
+        elif self.model_family == "internvl":
             self.eos_token_id = processing_class.convert_tokens_to_ids(EOS_TOKEN)
             self.pad_token_id = processing_class.convert_tokens_to_ids(END_OF_TEXT_TOKEN)
 
@@ -584,7 +596,7 @@ class GRPOGRTrainer(Trainer):
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, pixel_values=pixel_values, image_grid_thw=image_grid_thw)
         elif "internvl" in self.model_id.lower():
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, pixel_values=pixel_values, image_flags=image_grid_thw)
-        elif "gemma" in self.model_id.lower():
+        elif self.model_family == "it2t":
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, pixel_values=pixel_values, token_type_ids=token_type_ids)
 
         logits = outputs.logits
@@ -765,7 +777,7 @@ class GRPOGRTrainer(Trainer):
                 )
             elif "internvl" in self.model_id.lower():
                 prompt_inputs, image_inputs = self.multi_modal_get_item(inputs_tobe_updated_each_turn)
-            elif "gemma" in self.model_id.lower():
+            elif self.model_family == "it2t":
                 # Use image objects in the chat template when supported (matches MedGemma usage)
                 image_inputs = []
                 messages_with_images = []
@@ -893,7 +905,7 @@ class GRPOGRTrainer(Trainer):
                             )
 
                 completion_ids = prompt_completion_ids
-            elif "gemma" in self.model_id.lower():
+            elif self.model_family == "it2t":
                 with torch.no_grad():
                     if self.is_train:
                         # Training: Use standard sampling config
